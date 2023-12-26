@@ -4,7 +4,7 @@ let gl;                         // The webgl context.
 let surface;                    // A surface model
 let shProgram;                  // A shader program
 let spaceball;                  // A SimpleRotator object that lets the user rotate the view by mouse.
-
+let light;
 function deg2rad(angle) {
     return angle * Math.PI / 180;
 }
@@ -39,6 +39,14 @@ function Model(name) {
         gl.enableVertexAttribArray(shProgram.iAttribNormal);
 
         gl.drawArrays(gl.TRIANGLES, 0, this.count);
+    }
+    this.DrawWire = function () {
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iVertexBuffer);
+        gl.vertexAttribPointer(shProgram.iAttribVertex, 3, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(shProgram.iAttribVertex);
+
+        gl.drawArrays(gl.LINE_STRIP, 0, this.count);
     }
 }
 
@@ -92,12 +100,15 @@ function draw() {
     /* Draw the six faces of a cube, with different colors. */
 
     gl.uniform4fv(shProgram.iColor, [...hexToRgb(document.getElementById('color').value), 1]);
-    let x = document.getElementById('x').value,
-        y = document.getElementById('y').value,
+    let x = sin(Date.now() * 0.001),
+        y = x * x,
         z = document.getElementById('z').value
     gl.uniform3fv(shProgram.iDir, [x, y, z]);
 
     surface.Draw();
+    light.BufferData([0, 0, 0, x, y, z])
+    gl.uniform4fv(shProgram.iColor, [0,0,0, -1]);
+    light.DrawWire()
 }
 
 function update() {
@@ -128,8 +139,8 @@ function mapRange(value, a, b, c, d) {
 function CreateSurfaceData() {
     let vertexList = [],
         normalList = [];
-    const zCount = 20,
-        bCount = 20;
+    const zCount = 50,
+        bCount = 50;
 
     for (let i = 0; i < bCount; i++) {
         for (let j = 0; j < zCount; j++) {
@@ -220,6 +231,8 @@ function initGL() {
 
     surface = new Model('Surface');
     surface.BufferData(...CreateSurfaceData());
+    light = new Model()
+    light.BufferData([0, 0, 0, 1, 1, 1])
 
     gl.enable(gl.DEPTH_TEST);
 }

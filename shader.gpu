@@ -44,5 +44,7 @@ void main() {
                         lambertian * diffuse +
                         specular * vec3(1.0));
     gl_FragColor = vec4(c,1.0);
-    //gl_FragColor = vec4(N,1.0);
+    if(color.a<0.0){
+         gl_FragColor = vec4(1.0);
+    }
 }`;
