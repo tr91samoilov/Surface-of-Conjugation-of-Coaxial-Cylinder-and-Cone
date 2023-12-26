@@ -14,12 +14,16 @@ function deg2rad(angle) {
 function Model(name) {
     this.name = name;
     this.iVertexBuffer = gl.createBuffer();
+    this.iNormalBuffer = gl.createBuffer();
     this.count = 0;
 
-    this.BufferData = function (vertices) {
+    this.BufferData = function (vertices, normals) {
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.iVertexBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STREAM_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STREAM_DRAW);
 
         this.count = vertices.length / 3;
     }
@@ -30,7 +34,11 @@ function Model(name) {
         gl.vertexAttribPointer(shProgram.iAttribVertex, 3, gl.FLOAT, false, 0, 0);
         gl.enableVertexAttribArray(shProgram.iAttribVertex);
 
-        gl.drawArrays(gl.LINE_STRIP, 0, this.count);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iNormalBuffer);
+        gl.vertexAttribPointer(shProgram.iAttribNormal, 3, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(shProgram.iAttribNormal);
+
+        gl.drawArrays(gl.TRIANGLES, 0, this.count);
     }
 }
 
@@ -63,13 +71,14 @@ function draw() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     /* Set the values of the projection transformation */
-    let projection = m4.perspective(Math.PI / 8, 1, 8, 12);
+    let bounds = 4
+    let projection = m4.orthographic(-bounds, bounds, -bounds, bounds, -bounds, bounds);
 
     /* Get the view matrix from the SimpleRotator object.*/
     let modelView = spaceball.getViewMatrix();
 
     let rotateToPointZero = m4.axisRotation([0.707, 0.707, 0], 0.7);
-    let translateToPointZero = m4.translation(0, 0, -10);
+    let translateToPointZero = m4.translation(0, 0, -3);
 
     let matAccum0 = m4.multiply(rotateToPointZero, modelView);
     let matAccum1 = m4.multiply(translateToPointZero, matAccum0);
@@ -81,9 +90,19 @@ function draw() {
     gl.uniformMatrix4fv(shProgram.iModelViewProjectionMatrix, false, modelViewProjection);
 
     /* Draw the six faces of a cube, with different colors. */
-    gl.uniform4fv(shProgram.iColor, [1, 1, 0, 1]);
+
+    gl.uniform4fv(shProgram.iColor, [...hexToRgb(document.getElementById('color').value), 1]);
+    let x = document.getElementById('x').value,
+        y = document.getElementById('y').value,
+        z = document.getElementById('z').value
+    gl.uniform3fv(shProgram.iDir, [x, y, z]);
 
     surface.Draw();
+}
+
+function update() {
+    draw()
+    window.requestAnimationFrame(update)
 }
 
 function updateWireframe() {
@@ -91,6 +110,14 @@ function updateWireframe() {
     draw()
 }
 
+function hexToRgb(hex) {
+    var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return [
+        parseInt(result[1], 16) / 255,
+        parseInt(result[2], 16) / 255,
+        parseInt(result[3], 16) / 255
+    ];
+}
 // linearly maps value from the range (a..b) to (c..d)
 function mapRange(value, a, b, c, d) {
     // first map value from (a..b) to (0..1)
@@ -99,19 +126,71 @@ function mapRange(value, a, b, c, d) {
     return c + value * (d - c);
 }
 function CreateSurfaceData() {
-    let vertexList = [];
-    const zAmount = document.getElementById('steps').value, bAmount = document.getElementById('steps').value;
+    let vertexList = [],
+        normalList = [];
+    const zCount = 20,
+        bCount = 20;
 
-    for (let i = 0; i < bAmount; i++) {
-        for (let j = 0; j < zAmount; j++) {
-            let z = mapRange(j, 0, zAmount - 1, 0, limZ);
-            let b = mapRange(i, 0, bAmount - 1, 0, 2 * PI);
-            let vertex = conjugation(z, b)
-            vertexList.push(...vertex);
+    for (let i = 0; i < bCount; i++) {
+        for (let j = 0; j < zCount; j++) {
+            let z = mapRange(j, 0, zCount - 1, 0, limZ);
+            let b = mapRange(i, 0, bCount - 1, 0, 2 * PI);
+            let zE = mapRange(1, 0, zCount - 1, 0, limZ);
+            let bE = mapRange(1, 0, bCount - 1, 0, 2 * PI);
+            let v = conjugation(z, b)
+            let ve = conjugation(z + zE, b)
+            let ver = conjugation(z, b + bE)
+            let vert = conjugation(z + zE, b + bE)
+            let n = calcFacetAverage(z, b, zE, bE);
+            let no = calcFacetAverage(z + zE, b, zE, bE);
+            let nor = calcFacetAverage(z, b + bE, zE, bE);
+            let norm = calcFacetAverage(z + zE, b + bE, zE, bE);
+            vertexList.push(
+                ...v,
+                ...ve,
+                ...ver,
+                ...ver,
+                ...ve,
+                ...vert,
+            );
+            normalList.push(
+                ...n,
+                ...no,
+                ...nor,
+                ...nor,
+                ...no,
+                ...norm,
+            );
         }
     }
 
-    return vertexList;
+    return [vertexList, normalList];
+}
+function calcFacetAverage(z, b, zE, bE) {
+    let v0 = conjugation(z, b);
+    let v1 = conjugation(z + zE, b);
+    let v2 = conjugation(z, b + bE);
+    let v3 = conjugation(z - zE, b + bE);
+    let v4 = conjugation(z - zE, b);
+    let v5 = conjugation(z - zE, b - bE);
+    let v6 = conjugation(z, b - bE);
+    let v01 = m4.subtractVectors(v1, v0)
+    let v02 = m4.subtractVectors(v2, v0)
+    let v03 = m4.subtractVectors(v3, v0)
+    let v04 = m4.subtractVectors(v4, v0)
+    let v05 = m4.subtractVectors(v5, v0)
+    let v06 = m4.subtractVectors(v6, v0)
+    let n1 = m4.normalize(m4.cross(v01, v02))
+    let n2 = m4.normalize(m4.cross(v02, v03))
+    let n3 = m4.normalize(m4.cross(v03, v04))
+    let n4 = m4.normalize(m4.cross(v04, v05))
+    let n5 = m4.normalize(m4.cross(v05, v06))
+    let n6 = m4.normalize(m4.cross(v06, v01))
+    let n = [(n1[0] + n2[0] + n3[0] + n4[0] + n5[0] + n6[0]) / 6.0,
+    (n1[1] + n2[1] + n3[1] + n4[1] + n5[1] + n6[1]) / 6.0,
+    (n1[2] + n2[2] + n3[2] + n4[2] + n5[2] + n6[2]) / 6.0]
+    n = m4.normalize(n);
+    return n;
 }
 const { sin, cos, PI } = Math
 function conjugation(z, b) {
@@ -134,11 +213,13 @@ function initGL() {
     shProgram.Use();
 
     shProgram.iAttribVertex = gl.getAttribLocation(prog, "vertex");
+    shProgram.iAttribNormal = gl.getAttribLocation(prog, "normal");
     shProgram.iModelViewProjectionMatrix = gl.getUniformLocation(prog, "ModelViewProjectionMatrix");
     shProgram.iColor = gl.getUniformLocation(prog, "color");
+    shProgram.iDir = gl.getUniformLocation(prog, "dir");
 
     surface = new Model('Surface');
-    surface.BufferData(CreateSurfaceData());
+    surface.BufferData(...CreateSurfaceData());
 
     gl.enable(gl.DEPTH_TEST);
 }
@@ -204,5 +285,5 @@ function init() {
 
     spaceball = new TrackballRotator(canvas, draw, 0);
 
-    draw();
+    update();
 }
