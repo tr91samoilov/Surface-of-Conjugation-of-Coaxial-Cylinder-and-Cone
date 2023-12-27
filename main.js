@@ -4,6 +4,7 @@ let gl;                         // The webgl context.
 let surface;                    // A surface model
 let shProgram;                  // A shader program
 let spaceball;                  // A SimpleRotator object that lets the user rotate the view by mouse.
+let model, coords = [0, 0];
 
 function deg2rad(angle) {
     return angle * Math.PI / 180;
@@ -14,12 +15,20 @@ function deg2rad(angle) {
 function Model(name) {
     this.name = name;
     this.iVertexBuffer = gl.createBuffer();
+    this.iNormalBuffer = gl.createBuffer();
+    this.iTexCoordBuffer = gl.createBuffer();
     this.count = 0;
 
-    this.BufferData = function (vertices) {
+    this.BufferData = function (vertices, normals, texCoords) {
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.iVertexBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STREAM_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STREAM_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iTexCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texCoords), gl.STREAM_DRAW);
 
         this.count = vertices.length / 3;
     }
@@ -30,7 +39,15 @@ function Model(name) {
         gl.vertexAttribPointer(shProgram.iAttribVertex, 3, gl.FLOAT, false, 0, 0);
         gl.enableVertexAttribArray(shProgram.iAttribVertex);
 
-        gl.drawArrays(gl.LINE_STRIP, 0, this.count);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iNormalBuffer);
+        gl.vertexAttribPointer(shProgram.iAttribNormal, 3, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(shProgram.iAttribNormal);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.iTexCoordBuffer);
+        gl.vertexAttribPointer(shProgram.iAttribTexCoord, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(shProgram.iAttribTexCoord);
+
+        gl.drawArrays(gl.TRIANGLES, 0, this.count);
     }
 }
 
@@ -63,13 +80,14 @@ function draw() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     /* Set the values of the projection transformation */
-    let projection = m4.perspective(Math.PI / 8, 1, 8, 12);
+    let bounds = 4
+    let projection = m4.orthographic(-bounds, bounds, -bounds, bounds, -bounds, bounds);
 
     /* Get the view matrix from the SimpleRotator object.*/
     let modelView = spaceball.getViewMatrix();
 
     let rotateToPointZero = m4.axisRotation([0.707, 0.707, 0], 0.7);
-    let translateToPointZero = m4.translation(0, 0, -10);
+    let translateToPointZero = m4.translation(0, 0, -3);
 
     let matAccum0 = m4.multiply(rotateToPointZero, modelView);
     let matAccum1 = m4.multiply(translateToPointZero, matAccum0);
@@ -79,11 +97,21 @@ function draw() {
     let modelViewProjection = m4.multiply(projection, matAccum1);
 
     gl.uniformMatrix4fv(shProgram.iModelViewProjectionMatrix, false, modelViewProjection);
+    gl.uniform1f(shProgram.iScl, document.getElementById('scl').value);
+    gl.uniform2f(shProgram.iTexTransl, ...coords);
 
     /* Draw the six faces of a cube, with different colors. */
-    gl.uniform4fv(shProgram.iColor, [1, 1, 0, 1]);
 
     surface.Draw();
+    gl.uniform1f(shProgram.iScl, -10);
+    gl.uniformMatrix4fv(shProgram.iModelViewProjectionMatrix, false, m4.multiply(modelViewProjection,
+        m4.translation(...conjugation(coords[0] * limZ, coords[1] * 2 * PI))));
+    model.Draw();
+}
+
+function update() {
+    draw()
+    window.requestAnimationFrame(update)
 }
 
 function updateWireframe() {
@@ -91,6 +119,14 @@ function updateWireframe() {
     draw()
 }
 
+function hexToRgb(hex) {
+    var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return [
+        parseInt(result[1], 16) / 255,
+        parseInt(result[2], 16) / 255,
+        parseInt(result[3], 16) / 255
+    ];
+}
 // linearly maps value from the range (a..b) to (c..d)
 function mapRange(value, a, b, c, d) {
     // first map value from (a..b) to (0..1)
@@ -99,25 +135,90 @@ function mapRange(value, a, b, c, d) {
     return c + value * (d - c);
 }
 function CreateSurfaceData() {
-    let vertexList = [];
-    const zAmount = document.getElementById('steps').value, bAmount = document.getElementById('steps').value;
+    let vertexList = [],
+        normalList = [],
+        textureList = [];
+    const zCount = 20,
+        bCount = 20;
 
-    for (let i = 0; i < bAmount; i++) {
-        for (let j = 0; j < zAmount; j++) {
-            let z = mapRange(j, 0, zAmount - 1, 0, limZ);
-            let b = mapRange(i, 0, bAmount - 1, 0, 2 * PI);
-            let vertex = conjugation(z, b)
-            vertexList.push(...vertex);
+    for (let i = 0; i < bCount; i++) {
+        for (let j = 0; j < zCount; j++) {
+            let z = mapRange(j, 0, zCount - 1, 0, limZ);
+            let b = mapRange(i, 0, bCount - 1, 0, 2 * PI);
+            let zE = mapRange(1, 0, zCount - 1, 0, limZ);
+            let bE = mapRange(1, 0, bCount - 1, 0, 2 * PI);
+            let v = conjugation(z, b)
+            let ve = conjugation(z + zE, b)
+            let ver = conjugation(z, b + bE)
+            let vert = conjugation(z + zE, b + bE)
+            let n = calcFacetAverage(z, b, zE, bE);
+            let no = calcFacetAverage(z + zE, b, zE, bE);
+            let nor = calcFacetAverage(z, b + bE, zE, bE);
+            let norm = calcFacetAverage(z + zE, b + bE, zE, bE);
+            let te = [mapRange(j, 0, zCount, 0, 1), mapRange(i, 0, bCount, 0, 1)]
+            let tex = [mapRange(j + 1, 0, zCount, 0, 1), mapRange(i, 0, bCount, 0, 1)]
+            let text = [mapRange(j, 0, zCount, 0, 1), mapRange(i + 1, 0, bCount, 0, 1)]
+            let textu = [mapRange(j + 1, 0, zCount, 0, 1), mapRange(i + 1, 0, bCount, 0, 1)]
+            vertexList.push(
+                ...v,
+                ...ve,
+                ...ver,
+                ...ver,
+                ...ve,
+                ...vert,
+            );
+            normalList.push(
+                ...n,
+                ...no,
+                ...nor,
+                ...nor,
+                ...no,
+                ...norm,
+            );
+            textureList.push(
+                ...te,
+                ...tex,
+                ...text,
+                ...text,
+                ...tex,
+                ...textu,
+            );
         }
     }
 
-    return vertexList;
+    return [vertexList, normalList, textureList];
+}
+function calcFacetAverage(z, b, zE, bE) {
+    let v0 = conjugation(z, b);
+    let v1 = conjugation(z + zE, b);
+    let v2 = conjugation(z, b + bE);
+    let v3 = conjugation(z - zE, b + bE);
+    let v4 = conjugation(z - zE, b);
+    let v5 = conjugation(z - zE, b - bE);
+    let v6 = conjugation(z, b - bE);
+    let v01 = m4.subtractVectors(v1, v0)
+    let v02 = m4.subtractVectors(v2, v0)
+    let v03 = m4.subtractVectors(v3, v0)
+    let v04 = m4.subtractVectors(v4, v0)
+    let v05 = m4.subtractVectors(v5, v0)
+    let v06 = m4.subtractVectors(v6, v0)
+    let n1 = m4.normalize(m4.cross(v01, v02))
+    let n2 = m4.normalize(m4.cross(v02, v03))
+    let n3 = m4.normalize(m4.cross(v03, v04))
+    let n4 = m4.normalize(m4.cross(v04, v05))
+    let n5 = m4.normalize(m4.cross(v05, v06))
+    let n6 = m4.normalize(m4.cross(v06, v01))
+    let n = [(n1[0] + n2[0] + n3[0] + n4[0] + n5[0] + n6[0]) / 6.0,
+    (n1[1] + n2[1] + n3[1] + n4[1] + n5[1] + n6[1]) / 6.0,
+    (n1[2] + n2[2] + n3[2] + n4[2] + n5[2] + n6[2]) / 6.0]
+    n = m4.normalize(n);
+    return n;
 }
 const { sin, cos, PI } = Math
 function conjugation(z, b) {
-    let x = r(z) * sin(b),
-        y = r(z) * cos(b),
-        newZ = z
+    let x = 2 * r(z) * sin(b),
+        y = 2 * r(z) * cos(b),
+        newZ = 2 * z
     return [x, y, newZ]
 }
 const a = 0.1, limZ = 2, c = 1, R1 = 0.2
@@ -134,11 +235,17 @@ function initGL() {
     shProgram.Use();
 
     shProgram.iAttribVertex = gl.getAttribLocation(prog, "vertex");
+    shProgram.iAttribNormal = gl.getAttribLocation(prog, "normal");
+    shProgram.iAttribTexCoord = gl.getAttribLocation(prog, "texCoord");
     shProgram.iModelViewProjectionMatrix = gl.getUniformLocation(prog, "ModelViewProjectionMatrix");
     shProgram.iColor = gl.getUniformLocation(prog, "color");
+    shProgram.iScl = gl.getUniformLocation(prog, "scale");
+    shProgram.iTexTransl = gl.getUniformLocation(prog, "texTransl");
 
     surface = new Model('Surface');
-    surface.BufferData(CreateSurfaceData());
+    surface.BufferData(...CreateSurfaceData());
+    model = new Model()
+    model.BufferData(...CreateSphereData())
 
     gl.enable(gl.DEPTH_TEST);
 }
@@ -184,6 +291,7 @@ function init() {
     try {
         canvas = document.getElementById("webglcanvas");
         gl = canvas.getContext("webgl");
+        LoadTexture()
         if (!gl) {
             throw "Browser does not support WebGL";
         }
@@ -204,5 +312,76 @@ function init() {
 
     spaceball = new TrackballRotator(canvas, draw, 0);
 
-    draw();
+    update();
+}
+function CreateSphereData() {
+    let vertexList = [];
+
+    let u = 0,
+        t = 0;
+    while (u < Math.PI * 2) {
+        while (t < Math.PI) {
+            let v = getSphereVertex(u, t);
+            let w = getSphereVertex(u + 0.1, t);
+            let wv = getSphereVertex(u, t + 0.1);
+            let ww = getSphereVertex(u + 0.1, t + 0.1);
+            vertexList.push(v.x, v.y, v.z);
+            vertexList.push(w.x, w.y, w.z);
+            vertexList.push(wv.x, wv.y, wv.z);
+            vertexList.push(wv.x, wv.y, wv.z);
+            vertexList.push(w.x, w.y, w.z);
+            vertexList.push(ww.x, ww.y, ww.z);
+            t += 0.1;
+        }
+        t = 0;
+        u += 0.1;
+    }
+    return [vertexList, vertexList, vertexList]
+}
+const radius = 0.2;
+function getSphereVertex(long, lat) {
+    return {
+        x: radius * Math.cos(long) * Math.sin(lat),
+        y: radius * Math.sin(long) * Math.sin(lat),
+        z: radius * Math.cos(lat)
+    }
+}
+
+function LoadTexture() {
+    let texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    const image = new Image();
+    image.crossOrigin = 'anonymus';
+    image.src = "https://raw.githubusercontent.com/tr91samoilov/Surface-of-Conjugation-of-Coaxial-Cylinder-and-Cone/CGW/CGW_texture.jpg";
+    image.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.RGBA,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            image
+        );
+        console.log("imageLoaded")
+        draw()
+    }
+}
+
+window.onkeydown = (e) => {
+    if (e.keyCode == 87) {
+        coords[0] = Math.min(coords[0] + 0.02, 1);
+    }
+    else if (e.keyCode == 65) {
+        coords[1] = Math.max(coords[1] - 0.02, 0);
+    }
+    else if (e.keyCode == 83) {
+        coords[0] = Math.max(coords[0] - 0.02, 0);
+    }
+    else if (e.keyCode == 68) {
+        coords[1] = Math.min(coords[1] + 0.02, 1);
+    }
 }
